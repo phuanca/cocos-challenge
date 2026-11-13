@@ -1,0 +1,133 @@
+### Cocos challenge - manual API checks
+#
+# Start dependencies and application:
+#   docker compose up -d
+#   mvn spring-boot:run
+#
+# Requests that create or cancel orders modify the local data.
+# Reset with: docker compose down -v && docker compose up -d
+
+@baseUrl = http://localhost:8080
+
+### Health - application and database are available
+# Expected: 200
+GET {{baseUrl}}/actuator/health
+
+### Search - exact ticker, case insensitive
+# Expected: 200, first result ticker GGAL
+GET {{baseUrl}}/api/instruments?q=ggal
+
+### Search - partial instrument name
+# Expected: 200, results whose name contains "banco"
+GET {{baseUrl}}/api/instruments?q=banco
+
+### Search - deterministic pagination
+# Expected: 200, page 0 with at most 2 results
+GET {{baseUrl}}/api/instruments?q=a&page=0&size=2
+
+### Search - second page
+# Expected: 200, different results from page 0
+GET {{baseUrl}}/api/instruments?q=a&page=1&size=2
+
+### Search - literal SQL wildcard
+# Expected: 200, empty content; "%" is not treated as a wildcard
+GET {{baseUrl}}/api/instruments?q=%25
+
+### Search validation - missing query
+# Expected: 400, code INVALID_REQUEST and traceId
+GET {{baseUrl}}/api/instruments
+
+### Search validation - invalid page size
+# Expected: 400, code INVALID_REQUEST and traceId
+GET {{baseUrl}}/api/instruments?q=GGAL&size=101
+
+### Portfolio - balances, reservations and positions
+# Expected: 200, userId 1, availableCash 627500 and two positions
+GET {{baseUrl}}/api/users/1/portfolio
+
+### Portfolio - user does not exist
+# Expected: 404, code USER_NOT_FOUND and traceId
+GET {{baseUrl}}/api/users/999/portfolio
+
+### Order - MARKET BUY by quantity
+# Expected: 201, status FILLED and price equal to latest close
+POST {{baseUrl}}/api/users/1/orders
+Content-Type: application/json
+
+{
+  "instrumentId": 47,
+  "side": "BUY",
+  "type": "MARKET",
+  "quantity": 1
+}
+
+### Order - LIMIT BUY by amount
+# Expected: 201, quantity 2 and status NEW
+POST {{baseUrl}}/api/users/1/orders
+Content-Type: application/json
+
+{
+  "instrumentId": 45,
+  "side": "BUY",
+  "type": "LIMIT",
+  "amount": 2000,
+  "price": 710
+}
+
+### Order - insufficient cash
+# Expected: 201, persisted with status REJECTED
+POST {{baseUrl}}/api/users/1/orders
+Content-Type: application/json
+
+{
+  "instrumentId": 47,
+  "side": "BUY",
+  "type": "MARKET",
+  "quantity": 1000000
+}
+
+### Order - insufficient shares
+# Expected: 201, persisted with status REJECTED
+POST {{baseUrl}}/api/users/1/orders
+Content-Type: application/json
+
+{
+  "instrumentId": 47,
+  "side": "SELL",
+  "type": "MARKET",
+  "quantity": 1000000
+}
+
+### Order validation - LIMIT without price
+# Expected: 400, code INVALID_ORDER and traceId
+POST {{baseUrl}}/api/users/1/orders
+Content-Type: application/json
+
+{
+  "instrumentId": 47,
+  "side": "BUY",
+  "type": "LIMIT",
+  "quantity": 1
+}
+
+### Order validation - quantity and amount are mutually exclusive
+# Expected: 400, code INVALID_ORDER and traceId
+POST {{baseUrl}}/api/users/1/orders
+Content-Type: application/json
+
+{
+  "instrumentId": 47,
+  "side": "BUY",
+  "type": "LIMIT",
+  "quantity": 1,
+  "amount": 1000,
+  "price": 900
+}
+
+### Cancel - seeded NEW order
+# Expected: 200, status CANCELLED; reserved cash is released
+POST {{baseUrl}}/api/users/1/orders/5/cancel
+
+### Cancel - seeded FILLED order
+# Expected: 409, code ORDER_NOT_CANCELLABLE and traceId
+POST {{baseUrl}}/api/users/1/orders/2/cancel

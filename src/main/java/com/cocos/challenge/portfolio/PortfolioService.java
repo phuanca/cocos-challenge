@@ -5,6 +5,8 @@ import com.cocos.challenge.orders.OrderSide;
 import com.cocos.challenge.portfolio.dto.PortfolioResponse;
 import com.cocos.challenge.portfolio.dto.PositionResponse;
 import com.cocos.challenge.shared.error.ApiException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
@@ -19,6 +21,7 @@ import java.util.stream.Collectors;
 @Service
 public class PortfolioService {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(PortfolioService.class);
     private static final int CALCULATION_SCALE = 8;
     private static final int RESPONSE_SCALE = 4;
     private static final BigDecimal ONE_HUNDRED = BigDecimal.valueOf(100);
@@ -46,8 +49,16 @@ public class PortfolioService {
         );
 
         List<PositionState> activePositions = states.values().stream()
-                .filter(position -> position.quantity > 0)
+                .filter(position -> position.quantity != 0)
                 .toList();
+
+        activePositions.stream()
+                .filter(position -> position.quantity < 0)
+                .forEach(position -> LOGGER.warn(
+                        "Negative position detected instrumentId={} quantity={}",
+                        position.instrumentId,
+                        position.quantity
+                ));
 
         Set<Integer> instrumentIds = activePositions.stream()
                 .map(position -> position.instrumentId)
@@ -100,10 +111,30 @@ public class PortfolioService {
             PositionState state,
             PortfolioRepository.FilledOrder order
     ) {
-        state.totalCost = state.totalCost.add(
-                order.price().multiply(BigDecimal.valueOf(order.size()))
-        );
+        if (state.quantity >= 0) {
+            state.totalCost = state.totalCost.add(
+                    order.price().multiply(BigDecimal.valueOf(order.size()))
+            );
+            state.quantity += order.size();
+            return;
+        }
+
+        BigDecimal previousAverageCost = averageCost(state);
         state.quantity += order.size();
+
+        if (state.quantity < 0) {
+            state.totalCost = previousAverageCost.multiply(
+                    BigDecimal.valueOf(state.quantity)
+            );
+            return;
+        }
+
+        if (state.quantity == 0) {
+            state.totalCost = BigDecimal.ZERO;
+            return;
+        }
+
+        state.totalCost = order.price().multiply(BigDecimal.valueOf(state.quantity));
     }
 
     private void applySell(
@@ -111,23 +142,29 @@ public class PortfolioService {
             PortfolioRepository.FilledOrder order
     ) {
         if (state.quantity <= 0) {
+            state.totalCost = state.totalCost.subtract(
+                    order.price().multiply(BigDecimal.valueOf(order.size()))
+            );
+            state.quantity -= order.size();
             return;
         }
 
-        BigDecimal averageCost = state.totalCost.divide(
-                BigDecimal.valueOf(state.quantity),
-                CALCULATION_SCALE,
-                RoundingMode.HALF_UP
-        );
+        BigDecimal previousAverageCost = averageCost(state);
         state.quantity -= order.size();
 
-        if (state.quantity <= 0) {
-            state.quantity = 0;
+        if (state.quantity > 0) {
+            state.totalCost = previousAverageCost.multiply(
+                    BigDecimal.valueOf(state.quantity)
+            );
+            return;
+        }
+
+        if (state.quantity == 0) {
             state.totalCost = BigDecimal.ZERO;
             return;
         }
 
-        state.totalCost = averageCost.multiply(BigDecimal.valueOf(state.quantity));
+        state.totalCost = order.price().multiply(BigDecimal.valueOf(state.quantity));
     }
 
     private PositionResponse toResponse(
@@ -142,17 +179,21 @@ public class PortfolioService {
             );
         }
 
-        BigDecimal averageCost = state.totalCost.divide(
-                BigDecimal.valueOf(state.quantity),
-                CALCULATION_SCALE,
-                RoundingMode.HALF_UP
-        );
+        BigDecimal averageCost = averageCost(state);
         BigDecimal marketValue = marketData.close()
                 .multiply(BigDecimal.valueOf(state.quantity));
-        BigDecimal totalReturn = percentageChange(marketData.close(), averageCost);
+        BigDecimal totalReturn = positionReturn(
+                state.quantity,
+                marketData.close(),
+                averageCost
+        );
         BigDecimal dailyReturn = marketData.previousClose() == null
                 ? null
-                : percentageChange(marketData.close(), marketData.previousClose());
+                : positionReturn(
+                        state.quantity,
+                        marketData.close(),
+                        marketData.previousClose()
+                );
 
         return new PositionResponse(
                 state.instrumentId,
@@ -173,6 +214,30 @@ public class PortfolioService {
         return current.subtract(reference)
                 .divide(reference, CALCULATION_SCALE, RoundingMode.HALF_UP)
                 .multiply(ONE_HUNDRED);
+    }
+
+    private BigDecimal positionReturn(
+            long quantity,
+            BigDecimal current,
+            BigDecimal reference
+    ) {
+        if (quantity > 0) {
+            return percentageChange(current, reference);
+        }
+        if (reference.signum() == 0) {
+            return BigDecimal.ZERO;
+        }
+        return reference.subtract(current)
+                .divide(reference, CALCULATION_SCALE, RoundingMode.HALF_UP)
+                .multiply(ONE_HUNDRED);
+    }
+
+    private BigDecimal averageCost(PositionState state) {
+        return state.totalCost.divide(
+                BigDecimal.valueOf(state.quantity),
+                CALCULATION_SCALE,
+                RoundingMode.HALF_UP
+        );
     }
 
     private BigDecimal money(BigDecimal value) {

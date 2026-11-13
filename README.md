@@ -44,7 +44,7 @@ API REST para buscar instrumentos, consultar portfolios y operar órdenes.
 - Una caché puede acelerar lecturas; no debería ser la fuente para validar fondos o acciones.
 - Integración real con mercado: reserva local, envío asíncrono, confirmación o compensación y reconciliación.
 - Búsqueda a mayor escala: evaluar `pg_trgm` + GIN después de medir.
-- El seed contiene una venta `FILLED` de 30 acciones del instrumento 31 con solo 20 compradas; contradice la regla que impide vender sin tenencia.
+- El seed deja el instrumento 31 en `-10`: se expone y valúa como inconsistencia, se registra un warning y las nuevas ventas siguen siendo rechazadas.
 - Faltan constraints de dominio en la base: cantidades/precios positivos y valores válidos para side/type/status.
 - En producción: definir sampling, retención, alertas y un collector OTLP; la instrumentación no reemplaza métricas de negocio.
 

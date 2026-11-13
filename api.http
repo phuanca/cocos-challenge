@@ -42,7 +42,7 @@ GET {{baseUrl}}/api/instruments
 GET {{baseUrl}}/api/instruments?q=GGAL&size=101
 
 ### Portfolio - balances, reservations and positions
-# Expected: 200, userId 1, availableCash 627500 and two positions
+# Expected: 200, totalValue 889756, availableCash 627500 and three positions; instrument 31 has quantity -10
 GET {{baseUrl}}/api/users/1/portfolio
 
 ### Portfolio - user does not exist
